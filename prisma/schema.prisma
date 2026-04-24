@@ -151,6 +151,7 @@ model ChatMessage {
   text      String
   isRead    Boolean       @default(false)
   createdAt DateTime      @default(now())
+  attachments ChatAttachment[]
 }
 
 model Delivery {
@@ -183,4 +184,36 @@ model ActivityLog {
   ip        String?
   userAgent String?
   createdAt DateTime @default(now())
+}
+
+
+model ChatAttachment {
+  id          String   @id @default(cuid())
+  messageId   String
+  clientId    String
+  uploaderId  String?
+  uploaderRole Sender
+  fileName    String
+  mimeType    String
+  fileSize    Int
+  resourceType String
+  publicId    String
+  secureUrl   String
+  format      String?
+  bytes       Int?
+  duration    Float?
+  width       Int?
+  height      Int?
+  allowClientDownload Boolean @default(false)
+  deletedForAdmin Boolean @default(false)
+  deletedForClient Boolean @default(false)
+  deletedForAll Boolean @default(false)
+  createdAt   DateTime @default(now())
+
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  client User @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([messageId])
+  @@index([publicId])
 }
