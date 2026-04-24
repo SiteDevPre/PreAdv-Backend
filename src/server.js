@@ -709,12 +709,14 @@ app.post('/api/client/requests', authRequired, async (req, res) => {
 
 app.get('/api/client/messages', authRequired, async (req, res) => {
   if (req.user.role !== 'CLIENT') return res.status(403).json({ error: 'Client only' });
+
   const messages = await prisma.chatMessage.findMany({
     where: { clientId: req.user.id },
     orderBy: { createdAt: 'asc' },
     include: { attachments: { where: { deletedForAll: false }, orderBy: { createdAt: 'asc' } } }
   });
-  res.json({ messages });
+
+  res.json({ messages: messages.map(messageForClient) });
 });
 
 app.post('/api/client/messages', authRequired, async (req, res) => {
@@ -925,11 +927,17 @@ app.post('/api/admin/messages', authRequired, adminRequired, async (req, res) =>
 });
 
 app.get('/api/admin/messages/:clientId', authRequired, adminRequired, async (req, res) => {
+  const clientId = req.params.clientId;
+  const client = await prisma.user.findUnique({ where: { id: clientId } });
+  if (!client || client.role !== 'CLIENT') return res.status(404).json({ error: 'Client not found' });
+
   const messages = await prisma.chatMessage.findMany({
-    where: { clientId: req.params.clientId },
-    orderBy: { createdAt: 'asc' }
+    where: { clientId },
+    orderBy: { createdAt: 'asc' },
+    include: { attachments: { where: { deletedForAll: false }, orderBy: { createdAt: 'asc' } } }
   });
-  res.json({ messages });
+
+  res.json({ client: safeUser(client), messages: messages.map(messageForAdmin) });
 });
 
 app.post('/api/admin/deliveries', authRequired, adminRequired, async (req, res) => {
