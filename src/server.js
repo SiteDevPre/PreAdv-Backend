@@ -306,9 +306,30 @@ async function logActivity(req, action, metadata = {}, userId = null, actor = nu
 }
 
 async function ensureAdmin() {
-  const existing = await prisma.user.findUnique({ where: { email: ADMIN_EMAIL } });
-  if (existing) return existing;
   const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
+  const existing = await prisma.user.findUnique({ where: { email: ADMIN_EMAIL } });
+
+  if (existing) {
+    // Keep admin credentials aligned with Railway variables.
+    // This prevents old password hashes from locking the owner out after deploys.
+    if (existing.role !== 'ADMIN' || !existing.isActive) {
+      return prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          role: 'ADMIN',
+          name: existing.name || 'PRE ADV Owner',
+          passwordHash,
+          isActive: true
+        }
+      });
+    }
+
+    return prisma.user.update({
+      where: { id: existing.id },
+      data: { passwordHash, isActive: true }
+    });
+  }
+
   return prisma.user.create({
     data: {
       role: 'ADMIN',
