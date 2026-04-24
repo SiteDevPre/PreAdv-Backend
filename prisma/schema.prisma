@@ -192,7 +192,7 @@ model ChatAttachment {
   messageId   String
   clientId    String
   uploaderId  String?
-  uploaderRole Sender
+  uploaderRole String
   fileName    String
   mimeType    String
   fileSize    Int
