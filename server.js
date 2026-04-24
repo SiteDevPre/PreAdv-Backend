@@ -297,7 +297,7 @@ app.post('/api/auth/client/register', async (req, res) => {
   let user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
 
   if (user && user.isActive) {
-    return res.status(409).json({ error: 'Email already registered' });
+    return res.status(409).json({ error: 'Account already verified' });
   }
 
   if (user && user.role !== 'CLIENT') {
@@ -337,7 +337,7 @@ app.post('/api/auth/client/register', async (req, res) => {
     await sendVerificationCode({ user, req });
   } catch (error) {
     console.error('verification email failed', error.message);
-    return res.status(500).json({ error: 'Verification email failed' });
+    return res.status(503).json({ error: 'Verification code could not be sent' });
   }
 
   await logActivity(req, 'client_registration_pending', { email: normalizedEmail }, user.id, 'client');
@@ -402,7 +402,7 @@ app.post('/api/auth/client/resend-code', async (req, res) => {
     await sendVerificationCode({ user, req });
   } catch (error) {
     console.error('verification resend failed', error.message);
-    return res.status(500).json({ error: 'Verification email failed' });
+    return res.status(503).json({ error: 'Verification code could not be sent' });
   }
 
   await logActivity(req, 'client_verification_code_resent', { email }, user.id, 'client');
@@ -684,7 +684,7 @@ app.post('/api/admin/clients', authRequired, adminRequired, async (req, res) => 
   const { name, email, password, phone, company } = parsed.data;
   const normalizedEmail = email.toLowerCase().trim();
   const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-  if (existing) return res.status(409).json({ error: 'Email already registered' });
+  if (existing) return res.status(409).json({ error: 'Account already verified' });
 
   const user = await prisma.user.create({
     data: {
