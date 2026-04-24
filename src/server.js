@@ -365,7 +365,8 @@ const uploadedAttachmentSchema = z.object({
   bytes: z.number().int().positive().optional().nullable(),
   duration: z.number().optional().nullable(),
   width: z.number().int().positive().optional().nullable(),
-  height: z.number().int().positive().optional().nullable()
+  height: z.number().int().positive().optional().nullable(),
+  allowClientDownload: z.boolean().optional()
 });
 
 const messageFilesSchema = z.object({
@@ -1081,7 +1082,7 @@ async function createMessageWithUploadedFiles({ req, clientId, sender, text, att
           duration: att.duration || null,
           width: att.width || null,
           height: att.height || null,
-          allowClientDownload: sender === 'CLIENT'
+          allowClientDownload: sender === 'CLIENT' ? true : !!att.allowClientDownload
         }))
       }
     },
