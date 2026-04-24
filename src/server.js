@@ -709,13 +709,11 @@ app.post('/api/client/requests', authRequired, async (req, res) => {
 
 app.get('/api/client/messages', authRequired, async (req, res) => {
   if (req.user.role !== 'CLIENT') return res.status(403).json({ error: 'Client only' });
-
   const messages = await prisma.chatMessage.findMany({
     where: { clientId: req.user.id },
     orderBy: { createdAt: 'asc' },
     include: { attachments: { where: { deletedForAll: false }, orderBy: { createdAt: 'asc' } } }
   });
-
   res.json({ messages: messages.map(messageForClient) });
 });
 
