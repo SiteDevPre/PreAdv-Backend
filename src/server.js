@@ -92,6 +92,7 @@ function formatAttachment(att) {
     duration: att.duration,
     width: att.width,
     height: att.height,
+    allowClientDownload: att.allowClientDownload || att.uploaderRole === 'CLIENT',
     createdAt: att.createdAt
   };
 }
@@ -1016,6 +1017,28 @@ function requireAuth(role) {
   ];
 }
 
+
+
+const attachmentSchema = z.object({
+  fileName: z.string().min(1).max(180),
+  mimeType: z.string().min(1).max(120),
+  fileSize: z.number().int().positive().max(MAX_UPLOAD_MB * 1024 * 1024),
+  resourceType: z.string().min(1).max(30),
+  publicId: z.string().min(1).max(260),
+  secureUrl: z.string().url(),
+  format: z.string().max(30).optional().nullable(),
+  bytes: z.number().int().positive().optional().nullable(),
+  duration: z.number().optional().nullable(),
+  width: z.number().int().positive().optional().nullable(),
+  height: z.number().int().positive().optional().nullable(),
+  allowClientDownload: z.boolean().optional().default(false)
+});
+
+const messageWithAttachmentsSchema = z.object({
+  text: z.string().max(5000).optional().default(''),
+  attachments: z.array(attachmentSchema).max(12).optional().default([])
+});
+
 // ---------- Cloudinary signed uploads + chat attachments ----------
 
 app.post('/api/client/uploads/signature', requireAuth('CLIENT'), async (req, res) => {
@@ -1136,7 +1159,8 @@ async function createMessageWithAttachments({ req, clientId, sender, text, attac
           bytes: att.bytes || att.fileSize || null,
           duration: att.duration || null,
           width: att.width || null,
-          height: att.height || null
+          height: att.height || null,
+          allowClientDownload: sender === 'CLIENT' ? true : !!att.allowClientDownload
         }))
       }
     },
@@ -1186,6 +1210,22 @@ app.post('/api/admin/messages-with-files', requireAuth('ADMIN'), async (req, res
     res.status(error.statusCode || 500).json({ error: error.message || 'Message failed' });
   }
 });
+
+
+app.patch('/api/admin/attachments/:id/download', requireAuth('ADMIN'), async (req, res) => {
+  const attachment = await prisma.chatAttachment.findUnique({ where: { id: req.params.id } });
+  if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
+
+  const allow = !!req.body?.allowClientDownload;
+  const updated = await prisma.chatAttachment.update({
+    where: { id: attachment.id },
+    data: { allowClientDownload: allow }
+  });
+
+  await logActivity(req, 'admin_toggle_attachment_download', { attachmentId: attachment.id, allow }, req.user.id, 'admin');
+  res.json({ attachment: formatAttachment(updated) });
+});
+
 
 app.delete('/api/admin/attachments/:id', requireAuth('ADMIN'), async (req, res) => {
   const scope = String(req.query.scope || 'admin');
