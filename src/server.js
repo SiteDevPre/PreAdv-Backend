@@ -1003,6 +1003,19 @@ ensureAdmin()
   });
 
 
+
+
+function requireAuth(role) {
+  return [
+    authRequired,
+    (req, res, next) => {
+      if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+      if (role && req.user.role !== role) return res.status(403).json({ error: 'Forbidden' });
+      next();
+    }
+  ];
+}
+
 // ---------- Cloudinary signed uploads + chat attachments ----------
 
 app.post('/api/client/uploads/signature', requireAuth('CLIENT'), async (req, res) => {
