@@ -362,8 +362,8 @@ app.post('/api/auth/client/verify-email', async (req, res) => {
   }
 
   if (user.isActive) {
-    setAuthCookie(res, user);
-    return res.json({ user: safeUser(user), alreadyVerified: true });
+    const token = setAuthCookie(res, user);
+    return res.json({ user: safeUser(user), alreadyVerified: true, token });
   }
 
   const validLog = await findValidVerificationLog(user, parsed.data.code);
@@ -377,10 +377,10 @@ app.post('/api/auth/client/verify-email', async (req, res) => {
     data: { isActive: true }
   });
 
-  setAuthCookie(res, activeUser);
+  const token = setAuthCookie(res, activeUser);
   await logActivity(req, 'client_email_verified', { email }, activeUser.id, 'client');
 
-  res.json({ user: safeUser(activeUser), verified: true });
+  res.json({ user: safeUser(activeUser), verified: true, token });
 });
 
 app.post('/api/auth/client/resend-code', async (req, res) => {
@@ -427,9 +427,9 @@ app.post('/api/auth/client/login', async (req, res) => {
     });
   }
 
-  setAuthCookie(res, user);
+  const token = setAuthCookie(res, user);
   await logActivity(req, 'client_login', { email: user.email }, user.id, 'client');
-  res.json({ user: safeUser(user) });
+  res.json({ user: safeUser(user), token });
 });
 
 app.post('/api/auth/admin/login', async (req, res) => {
@@ -443,9 +443,9 @@ app.post('/api/auth/admin/login', async (req, res) => {
   const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
 
-  setAuthCookie(res, user);
+  const token = setAuthCookie(res, user);
   await logActivity(req, 'admin_login', { email: user.email }, user.id, 'admin');
-  res.json({ user: safeUser(user) });
+  res.json({ user: safeUser(user), token });
 });
 
 app.post('/api/auth/logout', authRequired, async (req, res) => {
