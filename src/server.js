@@ -541,20 +541,31 @@ app.post('/api/auth/client/login', async (req, res) => {
 });
 
 app.post('/api/auth/admin/login', async (req, res) => {
-  await ensureAdmin();
-  const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid data' });
+  const password = String(req.body?.password || '').trim();
 
-  const user = await prisma.user.findUnique({ where: { email: parsed.data.email.toLowerCase().trim() } });
-  if (!user || user.role !== 'ADMIN') return res.status(401).json({ error: 'Invalid credentials' });
+  if (!password || password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
 
-  const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  const user = await ensureAdmin();
 
   const token = setAuthCookie(res, user);
-  await logActivity(req, 'admin_login', { email: user.email }, user.id, 'admin');
+  await logActivity(req, 'admin_login', { email: user.email, method: 'owner_password' }, user.id, 'admin');
   res.json({ user: safeUser(user), token });
 });
+
+app.get('/api/admin-login-debug', async (req, res) => {
+  const admin = await ensureAdmin();
+  res.json({
+    ok: true,
+    adminEmail: ADMIN_EMAIL,
+    adminPasswordConfigured: !!ADMIN_PASSWORD,
+    adminId: admin.id,
+    adminRole: admin.role,
+    adminActive: admin.isActive
+  });
+});
+
 
 app.post('/api/auth/logout', authRequired, async (req, res) => {
   clearAuthCookie(res);
