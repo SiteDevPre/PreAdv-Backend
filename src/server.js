@@ -13,6 +13,7 @@ import { PrismaClient } from '@prisma/client';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
+import { v2 as cloudinary } from 'cloudinary';
 const prisma = new PrismaClient();
 const app = express();
 
@@ -21,6 +22,79 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-me';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'progettoadv1';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'owner@preadv.it';
 const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || `http://localhost:${PORT}`;
+
+const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || '';
+const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || '';
+const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || '';
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 300);
+
+cloudinary.config({
+  cloud_name: CLOUDINARY_CLOUD_NAME,
+  api_key: CLOUDINARY_API_KEY,
+  api_secret: CLOUDINARY_API_SECRET,
+  secure: true
+});
+
+function cloudinaryReady() {
+  return CLOUDINARY_CLOUD_NAME && CLOUDINARY_API_KEY && CLOUDINARY_API_SECRET;
+}
+
+function cleanFileName(name = 'file') {
+  return String(name || 'file').replace(/[^\w.\- ()]+/g, '_').slice(0, 140);
+}
+
+function cloudinaryResourceType(mimeType = '') {
+  const mime = String(mimeType).toLowerCase();
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/') || mime.startsWith('audio/')) return 'video';
+  return 'raw';
+}
+
+function attachmentForClient(att) {
+  if (!att || att.deletedForAll) return null;
+  return {
+    id: att.id,
+    fileName: att.fileName,
+    mimeType: att.mimeType,
+    fileSize: att.fileSize,
+    resourceType: att.resourceType,
+    secureUrl: att.secureUrl,
+    format: att.format,
+    bytes: att.bytes,
+    duration: att.duration,
+    width: att.width,
+    height: att.height,
+    allowClientDownload: !!att.allowClientDownload || att.uploaderRole === 'CLIENT',
+    createdAt: att.createdAt
+  };
+}
+
+function attachmentForAdmin(att) {
+  if (!att || att.deletedForAll) return null;
+  return {
+    id: att.id,
+    fileName: att.fileName,
+    mimeType: att.mimeType,
+    fileSize: att.fileSize,
+    resourceType: att.resourceType,
+    secureUrl: att.secureUrl,
+    format: att.format,
+    bytes: att.bytes,
+    duration: att.duration,
+    width: att.width,
+    height: att.height,
+    allowClientDownload: !!att.allowClientDownload || att.uploaderRole === 'CLIENT',
+    createdAt: att.createdAt
+  };
+}
+
+function messageForClient(m) {
+  return { ...m, attachments: (m.attachments || []).map(attachmentForClient).filter(Boolean) };
+}
+function messageForAdmin(m) {
+  return { ...m, attachments: (m.attachments || []).map(attachmentForAdmin).filter(Boolean) };
+}
+
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const EMAIL_FROM = process.env.EMAIL_FROM || 'PRE ADV STUDIO <noreply@preadv.it>';
@@ -271,6 +345,35 @@ const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1)
 });
+
+
+const uploadSignatureSchema = z.object({
+  clientId: z.string().optional(),
+  fileName: z.string().min(1).max(180),
+  mimeType: z.string().min(1).max(140),
+  fileSize: z.number().int().positive()
+});
+
+const uploadedAttachmentSchema = z.object({
+  fileName: z.string().min(1).max(180),
+  mimeType: z.string().min(1).max(140),
+  fileSize: z.number().int().positive().max(MAX_UPLOAD_MB * 1024 * 1024),
+  resourceType: z.string().min(1).max(30),
+  publicId: z.string().min(1).max(260),
+  secureUrl: z.string().url(),
+  format: z.string().max(30).optional().nullable(),
+  bytes: z.number().int().positive().optional().nullable(),
+  duration: z.number().optional().nullable(),
+  width: z.number().int().positive().optional().nullable(),
+  height: z.number().int().positive().optional().nullable()
+});
+
+const messageFilesSchema = z.object({
+  clientId: z.string().optional(),
+  text: z.string().max(5000).optional().default(''),
+  attachments: z.array(uploadedAttachmentSchema).max(12).optional().default([])
+});
+
 
 const verifyEmailSchema = z.object({
   email: z.string().email(),
@@ -608,7 +711,8 @@ app.get('/api/client/messages', authRequired, async (req, res) => {
   if (req.user.role !== 'CLIENT') return res.status(403).json({ error: 'Client only' });
   const messages = await prisma.chatMessage.findMany({
     where: { clientId: req.user.id },
-    orderBy: { createdAt: 'asc' }
+    orderBy: { createdAt: 'asc' },
+    include: { attachments: { where: { deletedForAll: false }, orderBy: { createdAt: 'asc' } } }
   });
   res.json({ messages });
 });
@@ -928,6 +1032,157 @@ app.get('/api/client/download/:deliveryId', authRequired, async (req, res) => {
 function serializeBigInt(value) {
   return JSON.parse(JSON.stringify(value, (_, v) => typeof v === 'bigint' ? Number(v) : v));
 }
+
+
+// ---------- Clean Cloudinary upload layer ----------
+
+function requireCloudinary(res) {
+  if (!cloudinaryReady()) {
+    res.status(503).json({ error: 'Cloudinary not configured' });
+    return false;
+  }
+  return true;
+}
+
+async function createMessageWithUploadedFiles({ req, clientId, sender, text, attachments }) {
+  const cleanText = String(text || '').trim();
+  const cleanAttachments = Array.isArray(attachments) ? attachments : [];
+
+  if (!cleanText && cleanAttachments.length === 0) {
+    const error = new Error('Message or attachment required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return prisma.chatMessage.create({
+    data: {
+      clientId,
+      sender,
+      text: cleanText || (cleanAttachments.length ? 'Allegato condiviso' : ''),
+      attachments: {
+        create: cleanAttachments.map(att => ({
+          clientId,
+          uploaderId: req.user.id,
+          uploaderRole: sender,
+          fileName: cleanFileName(att.fileName),
+          mimeType: att.mimeType,
+          fileSize: att.fileSize,
+          resourceType: att.resourceType || 'auto',
+          publicId: att.publicId,
+          secureUrl: att.secureUrl,
+          format: att.format || null,
+          bytes: att.bytes || att.fileSize || null,
+          duration: att.duration || null,
+          width: att.width || null,
+          height: att.height || null,
+          allowClientDownload: sender === 'CLIENT'
+        }))
+      }
+    },
+    include: { attachments: { where: { deletedForAll: false }, orderBy: { createdAt: 'asc' } } }
+  });
+}
+
+app.post('/api/client/uploads/signature', authRequired, async (req, res) => {
+  if (req.user.role !== 'CLIENT') return res.status(403).json({ error: 'Client only' });
+  if (!requireCloudinary(res)) return;
+
+  const parsed = uploadSignatureSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid upload data', details: parsed.error.flatten() });
+
+  const { fileName, mimeType, fileSize } = parsed.data;
+  if (fileSize > MAX_UPLOAD_MB * 1024 * 1024) return res.status(413).json({ error: `File too large. Max ${MAX_UPLOAD_MB} MB.` });
+
+  const timestamp = Math.round(Date.now() / 1000);
+  const folder = `preadv/clients/${req.user.id}/chat`;
+  const resourceType = cloudinaryResourceType(mimeType);
+  const publicId = `${Date.now()}-${nanoid(8)}-${cleanFileName(fileName).replace(/\.[^.]+$/, '')}`;
+  const params = { timestamp, folder, public_id: publicId, overwrite: false };
+  const signature = cloudinary.utils.api_sign_request(params, CLOUDINARY_API_SECRET);
+
+  res.json({ cloudName: CLOUDINARY_CLOUD_NAME, apiKey: CLOUDINARY_API_KEY, timestamp, signature, folder, publicId, resourceType, maxUploadMb: MAX_UPLOAD_MB });
+});
+
+app.post('/api/admin/uploads/signature', authRequired, adminRequired, async (req, res) => {
+  if (!requireCloudinary(res)) return;
+
+  const parsed = uploadSignatureSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid upload data', details: parsed.error.flatten() });
+
+  const { clientId, fileName, mimeType, fileSize } = parsed.data;
+  if (!clientId) return res.status(400).json({ error: 'Client required' });
+
+  const client = await prisma.user.findUnique({ where: { id: clientId } });
+  if (!client || client.role !== 'CLIENT') return res.status(404).json({ error: 'Client not found' });
+  if (fileSize > MAX_UPLOAD_MB * 1024 * 1024) return res.status(413).json({ error: `File too large. Max ${MAX_UPLOAD_MB} MB.` });
+
+  const timestamp = Math.round(Date.now() / 1000);
+  const folder = `preadv/clients/${clientId}/chat`;
+  const resourceType = cloudinaryResourceType(mimeType);
+  const publicId = `${Date.now()}-${nanoid(8)}-${cleanFileName(fileName).replace(/\.[^.]+$/, '')}`;
+  const params = { timestamp, folder, public_id: publicId, overwrite: false };
+  const signature = cloudinary.utils.api_sign_request(params, CLOUDINARY_API_SECRET);
+
+  res.json({ cloudName: CLOUDINARY_CLOUD_NAME, apiKey: CLOUDINARY_API_KEY, timestamp, signature, folder, publicId, resourceType, maxUploadMb: MAX_UPLOAD_MB });
+});
+
+app.post('/api/client/messages-with-files', authRequired, async (req, res) => {
+  if (req.user.role !== 'CLIENT') return res.status(403).json({ error: 'Client only' });
+
+  const parsed = messageFilesSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid message', details: parsed.error.flatten() });
+
+  try {
+    const message = await createMessageWithUploadedFiles({
+      req,
+      clientId: req.user.id,
+      sender: 'CLIENT',
+      text: parsed.data.text,
+      attachments: parsed.data.attachments
+    });
+
+    await logActivity(req, 'client_message_files', { attachments: parsed.data.attachments.length }, req.user.id, 'client');
+    res.status(201).json({ message: messageForClient(message) });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Message failed' });
+  }
+});
+
+app.post('/api/admin/messages-with-files', authRequired, adminRequired, async (req, res) => {
+  const parsed = messageFilesSchema.extend({ clientId: z.string().min(1) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid message', details: parsed.error.flatten() });
+
+  const client = await prisma.user.findUnique({ where: { id: parsed.data.clientId } });
+  if (!client || client.role !== 'CLIENT') return res.status(404).json({ error: 'Client not found' });
+
+  try {
+    const message = await createMessageWithUploadedFiles({
+      req,
+      clientId: parsed.data.clientId,
+      sender: 'ADMIN',
+      text: parsed.data.text,
+      attachments: parsed.data.attachments
+    });
+
+    await logActivity(req, 'admin_message_files', { clientId: parsed.data.clientId, attachments: parsed.data.attachments.length }, req.user.id, 'admin');
+    res.status(201).json({ message: messageForAdmin(message) });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Message failed' });
+  }
+});
+
+app.patch('/api/admin/attachments/:id/download', authRequired, adminRequired, async (req, res) => {
+  const attachment = await prisma.chatAttachment.findUnique({ where: { id: req.params.id } });
+  if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
+
+  const updated = await prisma.chatAttachment.update({
+    where: { id: attachment.id },
+    data: { allowClientDownload: !!req.body?.allowClientDownload }
+  });
+
+  res.json({ attachment: attachmentForAdmin(updated) });
+});
+
 
 app.use((err, req, res, next) => {
   console.error(err);
