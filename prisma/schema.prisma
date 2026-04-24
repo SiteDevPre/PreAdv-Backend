@@ -1,0 +1,186 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CLIENT
+  ADMIN
+}
+
+enum ProjectStatus {
+  BRIEF_RECEIVED
+  IN_PRODUCTION
+  IN_REVIEW
+  DELIVERED
+  ARCHIVED
+}
+
+enum RequestStatus {
+  NEW
+  IN_PROGRESS
+  WAITING
+  COMPLETED
+  ARCHIVED
+}
+
+enum DeliveryType {
+  PHOTO
+  VIDEO
+  GALLERY
+  DOWNLOAD
+  OTHER
+}
+
+enum MessageSender {
+  ADMIN
+  CLIENT
+}
+
+model User {
+  id           String     @id @default(cuid())
+  role         UserRole   @default(CLIENT)
+  name         String
+  email        String     @unique
+  phone        String?
+  company      String?
+  passwordHash String
+  discountCode String     @unique
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  projects      Project[]
+  requests      ClientRequest[]
+  deliveries    Delivery[]
+  messages      ChatMessage[]
+  leads         Lead[]
+  sessions      Session[]
+  activityLogs  ActivityLog[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Visit {
+  id        String   @id @default(cuid())
+  visitorId String
+  ip        String?
+  userAgent String?
+  referrer  String?
+  path      String
+  title     String?
+  utmSource String?
+  utmMedium String?
+  utmCampaign String?
+  createdAt DateTime @default(now())
+}
+
+model Click {
+  id        String   @id @default(cuid())
+  visitorId String?
+  ip        String?
+  userAgent String?
+  path      String?
+  label     String?
+  href      String?
+  type      String?
+  createdAt DateTime @default(now())
+}
+
+model Lead {
+  id        String   @id @default(cuid())
+  name      String?
+  email     String?
+  phone     String?
+  projectType String?
+  budget    String?
+  message   String?
+  source    String?
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  clientId    String
+  client      User          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  title       String
+  type        String?
+  description String?
+  status      ProjectStatus @default(BRIEF_RECEIVED)
+  dueDate     DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  requests   ClientRequest[]
+  deliveries Delivery[]
+}
+
+model ClientRequest {
+  id        String        @id @default(cuid())
+  clientId  String
+  client    User          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  projectId String?
+  project   Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  type      String
+  title     String
+  message   String?
+  status    RequestStatus @default(NEW)
+  adminNote String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+}
+
+model ChatMessage {
+  id        String        @id @default(cuid())
+  clientId  String
+  client    User          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sender    MessageSender
+  text      String
+  isRead    Boolean       @default(false)
+  createdAt DateTime      @default(now())
+}
+
+model Delivery {
+  id          String       @id @default(cuid())
+  clientId    String
+  client      User         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  title       String
+  type        DeliveryType @default(OTHER)
+  notes       String?
+  previewUrl  String?
+  downloadUrl String?
+  storageKey  String?
+  fileName    String?
+  fileSize    BigInt?
+  mimeType    String?
+  isPublished Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  actor     String?
+  action    String
+  metadata  Json?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+}
